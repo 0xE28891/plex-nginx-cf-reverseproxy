@@ -47,6 +47,7 @@ server {
   client_max_body_size 1G;
 
   add_header alt-svc 'h3-29=":443"; ma=86400';
+  add_header Alt-Svc 'quic=":443"'; ma=86400';
   add_header QUIC-Status $quic;
   add_header X-Powered-By "domain.tld";
   add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
