@@ -1,13 +1,18 @@
+## Must be set in the global scope see: https://forum.nginx.org/read.php?2,152294,152294
+## Why this is important especially with Plex as it makes a lot of requests http://vincent.bernat.im/en/blog/2011-ssl-session-reuse-rfc5077.html / https://www.peterbe.com/plog/ssl_session_cache-ab
 ssl_session_cache shared:MozSSL:10m;
 ssl_session_timeout 10m;
 
+## cache for plex_backend/photo (purges files older than 12h)
 proxy_cache_path /var/cache/nginx/ram_cache keys_zone=my_zone:10m inactive=12h;
 
+## Upstream to Plex
 upstream plex_backend {
   server 127.0.0.1:32400;
   keepalive 32;
 }
 
+## Redirect http to https
 server {
   listen 80;
   server_name plex.domain.tld;
@@ -15,52 +20,67 @@ server {
 }
 
 server {
-  listen 443 quic reuseport;							
-  listen 443 ssl http2;
+  listen 443 ssl http2; ## http2 can provide a substantial improvement for streaming: https://blog.cloudflare.com/introducing-http2/
+  listen 443 quic reuseport; ## UDP listener for QUIC+HTTP/3 - https://blog.cloudflare.com/experiment-with-http-3-using-nginx-and-quiche/
+
   server_name plex.domain.tld;
 
-  send_timeout 100m;
+  send_timeout 100m; ## Some players don't reopen a socket and playback stops totally instead of resuming after an extended pause (e.g. Chrome)
 
-  resolver 127.0.0.1 1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 ipv6=off valid=60s;
-  resolver_timeout 2s;
-
+  ## https://support.cloudflare.com/hc/en-us/categories/200276247-SSL-TLS
   ssl_certificate /etc/nginx/ssl/domain.tld/cert.pem;
   ssl_certificate_key /etc/nginx/ssl/domain.tld/key.pem;
-
-  ssl_protocols TLSv1.3;
-  ssl_prefer_server_ciphers off;
-  ssl_dyn_rec_enable on;
-
-  ssl_trusted_certificate /etc/nginx/ssl/domain.tld/cf-ca-root.pem;
-
-  ssl_dhparam /etc/nginx/ssl/dhparam.pem;
-  ssl_ecdh_curve X25519:prime256v1:secp384r1;
-  ssl_session_tickets off;
-
   ssl_client_certificate /etc/nginx/ssl/domain.tld/cf.pem;
+  ssl_trusted_certificate /etc/nginx/ssl/domain.tld/cf-ca-root.pem;
+  ssl_dhparam /etc/nginx/ssl/dhparam.pem;
+  
+  ssl_session_tickets off;
   ssl_verify_client on;
   
+  ## https://developers.cloudflare.com/ssl/ssl-tls/cipher-suites
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_ecdh_curve X25519:P-256:P-384:P-224:P-521;
+  ssl_ciphers '[ECDHE-ECDSA-AES128-GCM-SHA256|ECDHE-ECDSA-CHACHA20-POLY1305|ECDHE-RSA-AES128-GCM-SHA256|ECDHE-RSA-CHACHA20-POLY1305]:ECDHE+AES128:RSA+AES128:ECDHE+AES256:RSA+AES256:ECDHE+3DES:RSA+3DES';
+  ssl_prefer_server_ciphers on;
+  ssl_dyn_rec_enable on; ## https://blog.cloudflare.com/optimizing-tls-over-tcp-to-reduce-latency/
+  
+  ## Enable TLSv1.3's 0-RTT. Use $ssl_early_data when reverse proxying to prevent replay attacks - http://nginx.org/en/docs/http/ngx_http_ssl_module.html#ssl_early_data
+  ssl_early_data on;
+  
+  ## http://nginx.org/en/docs/http/ngx_http_v2_module.html
   http2_max_field_size 16k;
   http2_max_header_size 32k;
   http2_max_requests 50000;
-  
-  client_max_body_size 1G;
+  http2_push_preload on;
 
-  add_header alt-svc 'h3-29=":443"; ma=86400';										  
-  add_header X-Powered-By "domain.tld";
+
+  ## BorningSSL does not support stapling; disabled until libressl/openssl support http3/quic
+  #resolver 127.0.0.1 1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 ipv6=off valid=60s;
+  #resolver_timeout 2s;
+  #ssl_stapling on;
+  #ssl_stapling_verify on;
+  
+  client_max_body_size 1G; ## Maximum size of image that can be uploaded through Plex
+
+  add_header alt-svc 'h3-29=":443"; ma=86400'; ## Advertise that QUIC is available
+  add_header X-Early-Data $tls1_3_early_data; ## Debug 0-RTT
+  
+  ## A+ certificate: https://securityheaders.com/
+  add_header X-Powered-By "domain.tld"; ## For privacy; change to suit
   add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
   add_header X-Xss-Protection "1; mode=block" always;
   add_header X-Content-Type-Options "nosniff" always;
   add_header X-Frame-Options "SAMEORIGIN" always;
   add_header Referrer-Policy no-referrer always;
   add_header Content-Security-Policy "default-src 'none'; base-uri 'self'; script-src 'self' 'sha256-4yWHSc589xcanc7GAAy3++M4EvUxNtUsJySeoYEE6z8=' 'sha256-9YWnVu29Ew4LEW4tEiPWEdcHvzlbbwpiazu4PZR3oTY='; style-src 'self'; img-src 'self' https://provider-static.plex.tv data: blob:; font-src 'self' data:; connect-src 'self' https://plex.tv https://*.plex.direct:* wss://*.plex.direct:* wss://pubsub.plex.tv; media-src 'self' https://*.plex.direct:*; object-src 'self'; child-src 'none'; frame-src 'none'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests; block-all-mixed-content; referrer no-referrer;" always;
-  add_header Feature-Policy "geolocation none;midi none;notifications none;push none;sync-xhr none;microphone none;camera none;magnetometer none;gyroscope none;speaker self;vibrate none;fullscreen self;payment none;" always;
-  add_header X-Robots-Tag "noindex, noarchive, nosnippet";
+  add_header Permissions-Policy "geolocation=();midi=();notifications=();push=();sync-xhr=();microphone=();camera=();magnetometer=();gyroscope=();speaker=(self);vibrate=();fullscreen=(self);payment=();" always;
+  add_header X-Robots-Tag "noindex, noarchive, nosnippet"; ## Prevents indexing by search engine bots
   more_clear_headers "Pragma";
   more_clear_headers "Expires";
   more_clear_headers "Cache-Control";
-  more_set_headers 'Server: domain.tld';
+  more_set_headers 'Server: domain.tld'; ## For privacy; change to suit
   
+  ## Compression
   gzip on;
   gzip_vary off;
   gzip_disable msie6;
@@ -78,6 +98,7 @@ server {
   brotli_comp_level 6;
   brotli_types application/atom+xml application/javascript application/json application/rss+xml application/vnd.ms-fontobject application/x-font-opentype application/x-font-truetype application/x-font-ttf application/x-javascript application/xhtml+xml application/xml font/eot font/opentype font/otf font/truetype image/svg+xml image/vnd.microsoft.icon image/x-icon image/x-win-bitmap text/css text/javascript text/plain text/xml;
 
+  ## Restoring original visitor IPs: https://support.cloudflare.com/hc/en-us/articles/200170786-Restoring-original-visitor-IPs-logging-visitor-IP-addresses
   set_real_ip_from 103.21.244.0/22;
   set_real_ip_from 103.22.200.0/22;
   set_real_ip_from 103.31.4.0/22;
@@ -102,6 +123,7 @@ server {
   proxy_set_header X-Forwarded-Proto $scheme;
   proxy_set_header X-Forwarded-Ssl on;
 
+  ## Headers required for PMS
   proxy_set_header X-Plex-Client-Identifier $http_x_plex_client_identifier;
   proxy_set_header X-Plex-Device $http_x_plex_device;
   proxy_set_header X-Plex-Device-Name $http_x_plex_device_name;
@@ -115,28 +137,33 @@ server {
   proxy_set_header X-Plex-Device-Vendor $http_x_plex_device_vendor;
   proxy_set_header X-Plex-Model $http_x_plex_model;
 
+  ## Enable websockets
   proxy_set_header Sec-WebSocket-Extensions $http_sec_websocket_extensions;
   proxy_set_header Sec-WebSocket-Key $http_sec_websocket_key;
-  proxy_set_header Sec-WebSocket-Version $http_sec_websocket_version;
-  
+  proxy_set_header Sec-WebSocket-Version $http_sec_websocket_version;  
   proxy_http_version 1.1;
   proxy_set_header Upgrade $http_upgrade;
-  proxy_set_header Connection "Upgrade";    
+  proxy_set_header Connection "Upgrade";
+  
+  ## Disables compression between Plex and Nginx
   proxy_set_header Accept-Encoding "";
-  proxy_read_timeout 36000s;
 
+  proxy_read_timeout 36000s;
+  
+  ## Buffering off
   proxy_redirect off;
   proxy_buffering off;
   proxy_request_buffering off;							  
   
+  ## Redirect errors to domain
   proxy_intercept_errors on;
-
   error_page 400 401 402 403 404 405 406 407 408 409 410 411 412 413 414 415 416 417 418 420 422 423 424 426 428 429 431 444 449 450 451 500 501 502 503 504 505 506 507 508 509 510 511 =301 https://domain.tld;
 
   location / {
   proxy_pass http://plex_backend;
   }
   
+  ## /var/cache/nginx/ram_cache (caches after 1 use; valid for 12h)
   location /photo {
   proxy_pass http://plex_backend/photo;
   proxy_buffering on;
@@ -147,7 +174,13 @@ server {
   add_header X-Cache-Status $upstream_cache_status;
   }
   
+  ## Redirects PMS webserver to domain
   location /web/ {
   return 301 https://domain.tld;
   }
+}
+
+map $ssl_early_data $tls1_3_early_data {
+  "~." $ssl_early_data;
+  default "";
 }

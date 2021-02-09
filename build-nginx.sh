@@ -202,7 +202,6 @@ patch -p1  < "$path/patches/nginx-1.14.x-1.17.x-ngx_http_v2_filter_module.c.patc
   --without-http_autoindex_module \
   --without-http_userid_module \
   --without-http_geo_module \
-  --without-http_map_module \
   --without-http_split_clients_module \
   --without-http_referer_module \
   --without-http_fastcgi_module \
