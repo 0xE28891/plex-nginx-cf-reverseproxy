@@ -3,6 +3,7 @@
 This configuration will allow you to serve Plex via Nginx behind CloudFlare
 
  * Originally based on https://github.com/toomuchio/plex-nginx-reverseproxy
+ * Build script based on https://github.com/MatthewVance/nginx-build
 
 ## Features
 
