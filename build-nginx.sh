@@ -2,30 +2,29 @@
 # Run as root or with sudo
 
 export PATH=$PATH:/usr/local/go/bin
-source $HOME/.cargo/env
+source "$HOME"/.cargo/env
 
 if [[ $EUID -ne 0 ]]; then
   echo "This script must be run as root or with sudo."
   exit 1
 fi
 
-# Make script exit if a simple command fails and
-# Make script print commands being executed
+## Make script exit if a simple command fails and make script print commands being executed
 set -e -x
 
-# Set names of latest versions of each package
+## Set names of latest versions of each package
 version_pcre=pcre-8.44
 version_nginx=nginx-1.18.0
 version_libatomic=7.6.10
 version_headers=0.33
 
-# Set checksums of latest versions
+## Set checksums of latest versions
 sha256_pcre=aecafd4af3bd0f3935721af77b889d9024b2e01d96b58471bd91a3063fb47728
 sha256_nginx=4c373e7ab5bf91d34a4f11a0c9496561061ba5eee6020db272a17a7228d35f99
 sha256_libatomic=e6b0909cf4e63cec693fe6c48191ce864c32c5113e16c3f517aa2a244b46992f
 sha256_headers=a3dcbab117a9c103bc1ea5200fc00a7b7d2af97ff7fd525f16f8ac2632e30fbf
 
-# Set URLs to the source directories
+## Set URLs to the source directories
 source_pcre=https://ftp.pcre.org/pub/pcre/
 source_zlib=https://github.com/cloudflare/zlib
 source_nginx=https://nginx.org/download/
@@ -33,16 +32,17 @@ source_libatomic=https://github.com/ivmai/libatomic_ops/archive/v
 source_brotli=https://github.com/google/ngx_brotli
 source_headers=https://github.com/openresty/headers-more-nginx-module/archive/v
 source_quiche=https://github.com/cloudflare/quiche
+source_jemalloc=https://github.com/jemalloc/jemalloc
 
-# Set where OpenSSL and NGINX will be built
+## Set where OpenSSL and NGINX will be built
 path=$(pwd)
 bpath=$path/build
 time=$(date +%m%d%Y-%H%M%S-%Z)
 
-# Clean screen before launching
+## Clean screen before launching
 clear
 
-# Clean out any files from previous runs of this script
+## Clean out any files from previous runs of this script
 rm -rf \
   "$bpath"
 mkdir "$bpath"
@@ -50,14 +50,14 @@ rm -rf \
   "$path/package"
 mkdir "$path/package"
 
-# Move tmp within build directory
+## Move tmp within build directory
 mkdir "$bpath/tmp"
 export TMPDIR="$bpath/tmp"
 
-# Add backports repo
+## Add backports repo
 echo "deb http://ftp.debian.org/debian buster-backports main" | tee /etc/apt/sources.list.d/backports.list
 
-# Ensure the required software to compile NGINX is installed
+## Ensure the required software to compile NGINX is installed
 apt-get update && apt-get -y install \
   binutils \
   build-essential \
@@ -70,7 +70,7 @@ apt-get update && apt-get -y install \
   curl \
   wget
 
-# Download the source files and verify their checksums
+## Download the source files and verify their checksums
 curl -L "${source_pcre}${version_pcre}.tar.gz" -o "${bpath}/pcre.tar.gz" && \
   echo "${sha256_pcre} ${bpath}/pcre.tar.gz" | sha256sum -c -
 curl -L "${source_nginx}${version_nginx}.tar.gz" -o "${bpath}/nginx.tar.gz" && \
@@ -80,22 +80,24 @@ curl -L "${source_libatomic}${version_libatomic}.tar.gz" -o "${bpath}/libatomic.
 curl -L "${source_headers}${version_headers}.tar.gz" -o "${bpath}/headers.tar.gz" && \
   echo "${sha256_headers} ${bpath}/headers.tar.gz" | sha256sum -c -
 cd "$bpath"
+
 git clone $source_zlib --branch gcc.amd64
+git clone $source_jemalloc
 git clone --depth=1 --recurse-submodules $source_brotli
 git clone --recursive $source_quiche
 
-# Expand the source files
+## Expand the source files
 cd "$bpath"
 for archive in ./*.tar.gz; do
   tar xzf "$archive"
 done
 
-# Clean up source files
+## Clean up source files
 rm -rf \
   "$GNUPGHOME" \
   "$bpath"/*.tar.*
 
-# Create NGINX cache directories if they do not already exist
+## Create NGINX cache directories if they do not already exist
 if [ ! -d "/var/cache/nginx/" ]; then
   mkdir -p \
     /var/cache/nginx/client_temp \
@@ -106,7 +108,7 @@ if [ ! -d "/var/cache/nginx/" ]; then
     /var/cache/nginx/ram_cache
 fi
 
-# We add sites-* folders as some use them. /etc/nginx/conf.d/ is the vhost folder by defaultnginx
+## We add sites-* folders as some use them. /etc/nginx/conf.d/ is the vhost folder by defaultnginx
 if [[ ! -d /etc/nginx/sites-available ]]; then
 	mkdir -p /etc/nginx/sites-available
 	cp "$path/conf/plex.domain.tld" "/etc/nginx/sites-available/plex.domain.tld"
@@ -121,11 +123,11 @@ if [[ ! -e /etc/nginx/nginx.conf ]]; then
 	cp "$path/conf/nginx.conf" "/etc/nginx/nginx.conf"
 fi
 
-# Add NGINX group and user if they do not already exist
+## Add NGINX group and user if they do not already exist
 id -g nginx &>/dev/null || addgroup --system nginx
 id -u nginx &>/dev/null || adduser --disabled-password --system --home /var/cache/nginx --shell /sbin/nologin --group nginx
 
-# Test to see if our version of gcc supports __SIZEOF_INT128__
+## Test to see if our version of gcc supports __SIZEOF_INT128__
 if gcc -dM -E - </dev/null | grep -q __SIZEOF_INT128__
 then
   ecflag="enable-ec_nistp_64_gcc_128"
@@ -133,28 +135,27 @@ else
   ecflag=""
 fi
 
-### make libatomic
+## make libatomic
 cd "$bpath/libatomic_ops-$version_libatomic"
 autoreconf -i
 ./configure
 make -j "$(nproc)"
 make install
 
-# make zlib
+## make zlib
 cd "$bpath/zlib"
 ./configure
 make -j "$(nproc)"
 
-### make jemalloc
-cd "$bpath"
-git clone https://github.com/jemalloc/jemalloc
+## make jemalloc
 cd "$bpath/jemalloc"
 ./autogen.sh
 make -j "$(nproc)"
 make install
+
 ldconfig
 
-# Build NGINX, with various modules included/excluded; requires GCC 10+
+## Build NGINX, with various modules included/excluded; requires GCC 10+
 cd "$bpath/$version_nginx"
 patch -p1  < "$path/patches/nginx_with_quic.patch"
 patch -p1  < "$path/patches/Enable_BoringSSL_OCSP.patch"
@@ -224,11 +225,11 @@ patch -p1  < "$path/patches/nginx-1.14.x-1.17.x-ngx_http_v2_filter_module.c.patc
 make -j "$(nproc)"
 make install
 checkinstall --install=no -y
-cp $bpath/$version_nginx/*.deb "$path/package"
+cp "$bpath/$version_nginx"/*.deb "$path/package"
 make clean
 strip -s /usr/sbin/nginx*
 
-# Create NGINX systemd service file if it does not already exist
+## Create NGINX systemd service file if it does not already exist
 if [ ! -e "/lib/systemd/system/nginx.service" ]; then
   # Control will enter here if the NGINX service doesn't exist.
   file="/lib/systemd/system/nginx.service"
@@ -254,4 +255,4 @@ WantedBy=multi-user.target
 EOF
 fi
 
-echo "All done."
+echo "SUCCESS"
